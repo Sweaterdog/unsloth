@@ -81,9 +81,21 @@ pass
 def get_device_type():
     if hasattr(torch, "cuda") and torch.cuda.is_available():
         return "cuda"
-    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+    # TPU/XLA support
+    try:
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+        # Check for XLA device presence
+        if hasattr(xm, 'xla_device_hw') and xm.xla_device_hw() == 'TPU':
+            return "tpu"
+        # Fallback: check if any XLA device is present
+        if str(xm.xla_device()).startswith("xla"):  # e.g., xla:1
+            return "tpu"
+    except Exception:
+        pass
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
         return "xpu"
-    raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs and Intel GPUs.")
+    raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs, Intel GPUs, and TPUs (PyTorch/XLA). If you are on Colab/Kaggle TPU, ensure torch_xla is installed.")
 pass
 DEVICE_TYPE : str = get_device_type()
 
@@ -151,6 +163,14 @@ if DEVICE_TYPE == "cuda":
         def is_bf16_supported(): return SUPPORTS_BFLOAT16
         torch.cuda.is_bf16_supported = is_bf16_supported
     pass
+elif DEVICE_TYPE == "tpu":
+    # TPU/XLA: bfloat16 is always supported
+    SUPPORTS_BFLOAT16 = True
+    import torch_xla.core.xla_model as xm
+    # Set default device for torch_xla
+    XLA_DEVICE = xm.xla_device()
+    torch_device = XLA_DEVICE
+    print("Unsloth: Running on TPU/XLA device.")
 elif DEVICE_TYPE == "xpu":
     # torch.xpu.is_bf16_supported() does not have including_emulation
     # set SUPPORTS_BFLOAT16 as torch.xpu.is_bf16_supported()
@@ -253,3 +273,8 @@ from .trainer import *
 
 # Patch TRL trainers for backwards compatibility
 _patch_trl_trainer()
+
+# TPU/XLA warnings and info
+if DEVICE_TYPE == "tpu":
+    print("[Unsloth] TPU/XLA support is experimental. Please ensure torch_xla is installed and you are running in a TPU-enabled environment.")
+    print("[Unsloth] For distributed training, use UnslothTrainer.launch_distributed(). See TPU_SUPPORT.md for details.")
