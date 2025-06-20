@@ -79,22 +79,36 @@ except Exception as exception:
 pass
 
 def get_device_type():
-    if hasattr(torch, "cuda") and torch.cuda.is_available():
-        return "cuda"
-    # TPU/XLA support
+    import sys
+    print("[Unsloth Debug] Python version:", sys.version)
     try:
-        import torch_xla
-        import torch_xla.core.xla_model as xm
-        # Check for XLA device presence
-        if hasattr(xm, 'xla_device_hw') and xm.xla_device_hw() == 'TPU':
-            return "tpu"
-        # Fallback: check if any XLA device is present
-        if str(xm.xla_device()).startswith("xla"):  # e.g., xla:1
-            return "tpu"
-    except Exception:
-        pass
-    if hasattr(torch, "xpu") and torch.xpu.is_available():
-        return "xpu"
+        import torch
+        print("[Unsloth Debug] torch version:", torch.__version__)
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            print("[Unsloth Debug] CUDA detected.")
+            return "cuda"
+        # TPU/XLA support
+        try:
+            import torch_xla
+            import torch_xla.core.xla_model as xm
+            print("[Unsloth Debug] torch_xla imported.")
+            if hasattr(xm, 'xla_device_hw'):
+                print("[Unsloth Debug] xm.xla_device_hw():", xm.xla_device_hw())
+                if xm.xla_device_hw() == 'TPU':
+                    print("[Unsloth Debug] TPU detected via xla_device_hw().")
+                    return "tpu"
+            xla_dev = str(xm.xla_device())
+            print("[Unsloth Debug] xm.xla_device():", xla_dev)
+            if xla_dev.startswith("xla"):
+                print("[Unsloth Debug] TPU detected via xla_device().")
+                return "tpu"
+        except Exception as e:
+            print("[Unsloth Debug] torch_xla import or check failed:", e)
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            print("[Unsloth Debug] XPU detected.")
+            return "xpu"
+    except Exception as e:
+        print("[Unsloth Debug] torch import failed:", e)
     raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs, Intel GPUs, and TPUs (PyTorch/XLA). If you are on Colab/Kaggle TPU, ensure torch_xla is installed.")
 pass
 DEVICE_TYPE : str = get_device_type()
