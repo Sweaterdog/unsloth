@@ -284,6 +284,8 @@ from .save import *
 from .chat_templates import *
 from .tokenizer_utils import *
 from .trainer import *
+from .models.diffusion import FastDiffusionModel
+from .diffusion_trainer import DiffusionTrainer, DiffusionTrainingArguments
 
 # Patch TRL trainers for backwards compatibility
 _patch_trl_trainer()
@@ -291,4 +293,4 @@ _patch_trl_trainer()
 # TPU/XLA warnings and info
 if DEVICE_TYPE == "tpu":
     print("[Unsloth] TPU/XLA support is experimental. Please ensure torch_xla is installed and you are running in a TPU-enabled environment.")
-    print("[Unsloth] For distributed training, use UnslothTrainer.launch_distributed(). See TPU_SUPPORT.md for details.")
+    print("[Unsloth] For distributed training, use UnslothTrainer.launch_distributed() or DiffusionTrainer.launch_distributed(). See TPU_SUPPORT.md for details.")
