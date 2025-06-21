@@ -79,11 +79,33 @@ except Exception as exception:
 pass
 
 def get_device_type():
-    if hasattr(torch, "cuda") and torch.cuda.is_available():
+    import sys
+    # Check for CUDA first
+    if torch.cuda.is_available():
         return "cuda"
-    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+
+    # Check for XPU
+    # Note: Place XPU check before TPU if XPU environments might also have torch_xla installed
+    # but XPU is the preferred/actual device.
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
         return "xpu"
-    raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs and Intel GPUs.")
+
+    # Check for TPU
+    try:
+        import torch_xla.core.xla_model as xm
+        # Using xm.xrt_world_size() is a robust way to check if XLA has initialized
+        # and found any XLA devices (TPUs).
+        if xm.xrt_world_size() > 0:
+            return "tpu"
+    except ImportError:
+        # torch_xla is not installed, so it cannot be a PyTorch/XLA TPU environment.
+        pass
+    except Exception:
+        # Catch any other errors during XLA checks, such as if torch_xla is imported
+        # but not fully configured or usable, preventing crashes.
+        pass
+
+    raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs, Intel GPUs, or TPUs.")
 pass
 DEVICE_TYPE : str = get_device_type()
 
@@ -151,6 +173,14 @@ if DEVICE_TYPE == "cuda":
         def is_bf16_supported(): return SUPPORTS_BFLOAT16
         torch.cuda.is_bf16_supported = is_bf16_supported
     pass
+elif DEVICE_TYPE == "tpu":
+    # TPU/XLA: bfloat16 is always supported
+    SUPPORTS_BFLOAT16 = True
+    import torch_xla.core.xla_model as xm
+    # Set default device for torch_xla
+    XLA_DEVICE = xm.xla_device()
+    torch_device = XLA_DEVICE
+    print("Unsloth: Running on TPU/XLA device.")
 elif DEVICE_TYPE == "xpu":
     # torch.xpu.is_bf16_supported() does not have including_emulation
     # set SUPPORTS_BFLOAT16 as torch.xpu.is_bf16_supported()
@@ -250,6 +280,13 @@ from .save import *
 from .chat_templates import *
 from .tokenizer_utils import *
 from .trainer import *
+from .models.diffusion import FastDiffusionModel
+from .diffusion_trainer import DiffusionTrainer, DiffusionTrainingArguments
 
 # Patch TRL trainers for backwards compatibility
 _patch_trl_trainer()
+
+# TPU/XLA warnings and info
+if DEVICE_TYPE == "tpu":
+    print("[Unsloth] TPU/XLA support is experimental. Please ensure torch_xla is installed and you are running in a TPU-enabled environment.")
+    print("[Unsloth] For distributed training, use UnslothTrainer.launch_distributed() or DiffusionTrainer.launch_distributed(). See TPU_SUPPORT.md for details.")

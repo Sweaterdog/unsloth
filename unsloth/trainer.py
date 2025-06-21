@@ -119,10 +119,13 @@ def _create_unsloth_optimizer(
 pass
 
 
+from unsloth import DEVICE_TYPE
+
 class UnslothTrainer(SFTTrainer):
     def create_optimizer(self):
         embedding_learning_rate = getattr(self.args, "embedding_learning_rate", None)
-        if embedding_learning_rate is None: return super().create_optimizer()
+        if embedding_learning_rate is None:
+            return super().create_optimizer()
 
         if self.optimizer is None:
             optimizer_cls, optimizer_kwargs = SFTTrainer.get_optimizer_cls_and_kwargs(self.args)
@@ -132,9 +135,104 @@ class UnslothTrainer(SFTTrainer):
                 optimizer_kwargs,
                 embedding_learning_rate,
             )
-        pass
         return self.optimizer
-    pass
+
+    def training_step(self, *args, **kwargs):
+        # TPU/XLA: Use xm.mark_step() to sync
+        output = super().training_step(*args, **kwargs)
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            xm.mark_step()
+        return output
+
+    def _wrap_model(self, model, training=True, dataloader=None):
+        # Move model to TPU if needed
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            model = model.to(xm.xla_device())
+            # Patch model.eval() and model.train() to always keep on XLA device
+            orig_train = model.train
+            orig_eval = model.eval
+            def train_patch(mode=True):
+                result = orig_train(mode)
+                return result.to(xm.xla_device())
+            def eval_patch():
+                result = orig_eval()
+                return result.to(xm.xla_device())
+            model.train = train_patch
+            model.eval = eval_patch
+        return super()._wrap_model(model, training, dataloader)
+
+    def get_train_dataloader(self):
+        dataloader = super().get_train_dataloader()
+        if DEVICE_TYPE == "tpu":
+            try:
+                from torch_xla.distributed.parallel_loader import MpDeviceLoader
+                import torch_xla.core.xla_model as xm
+                dataloader = MpDeviceLoader(dataloader, xm.xla_device())
+            except ImportError:
+                warnings.warn("torch_xla is not installed. TPU DataLoader will not be used.")
+        return dataloader
+
+    def optimizer_step(self, *args, **kwargs):
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            xm.optimizer_step(self.optimizer)
+        else:
+            return super().optimizer_step(*args, **kwargs)
+
+    def evaluate(self, *args, **kwargs):
+        output = super().evaluate(*args, **kwargs)
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            xm.mark_step()
+        return output
+
+    def predict(self, *args, **kwargs):
+        output = super().predict(*args, **kwargs)
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            xm.mark_step()
+        return output
+
+    def save_model(self, output_dir=None, _internal_call=False):
+        # Ensure model is moved to CPU before saving on TPU
+        if DEVICE_TYPE == "tpu":
+            self.model.to("cpu")
+        return super().save_model(output_dir, _internal_call)
+
+    @staticmethod
+    def launch_distributed(fn, args=()):
+        """Launch a function on all TPU cores using xmp.spawn."""
+        try:
+            import torch_xla.distributed.xla_multiprocessing as xmp
+            xmp.spawn(fn, args=args, nprocs=8, start_method='fork')
+        except ImportError:
+            raise RuntimeError("torch_xla is required for distributed TPU training.")
+    
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+        # On TPU, sync before logging/saving/evaluating
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            xm.mark_step()
+        return super()._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+
+    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
+        # Ensure model is loaded to XLA device on TPU
+        model = super()._load_from_checkpoint(resume_from_checkpoint, model)
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            model = model.to(xm.xla_device())
+        return model
+
+    def _gather_and_numpify(self, tensors, name):
+        # On TPU, use xm.mesh_reduce to aggregate metrics
+        if DEVICE_TYPE == "tpu":
+            import torch_xla.core.xla_model as xm
+            import numpy as np
+            result = xm.mesh_reduce(name, tensors, np.mean)
+            return result
+        return super()._gather_and_numpify(tensors, name)
 pass
 
 # From `trl>=0.13.0`, they changed how to pass several params to the trainer
@@ -216,7 +314,7 @@ pass
 def _patch_trl_trainer():
     import trl
     if hasattr(trl, "__UNSLOTH_BACKWARDS_COMPATIBLE__"): return
-    if Version(trl.__version__) <= Version("0.11.0"): return
+    if Version(transformers_version) <= Version("0.11.0"): return
 
     import trl.trainer
     trl_classes = dir(trl.trainer)
