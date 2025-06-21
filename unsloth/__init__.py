@@ -80,36 +80,32 @@ pass
 
 def get_device_type():
     import sys
-    print("[Unsloth Debug] Python version:", sys.version)
+    # Check for CUDA first
+    if torch.cuda.is_available():
+        return "cuda"
+
+    # Check for XPU
+    # Note: Place XPU check before TPU if XPU environments might also have torch_xla installed
+    # but XPU is the preferred/actual device.
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"
+
+    # Check for TPU
     try:
-        import torch
-        print("[Unsloth Debug] torch version:", torch.__version__)
-        if hasattr(torch, "cuda") and torch.cuda.is_available():
-            print("[Unsloth Debug] CUDA detected.")
-            return "cuda"
-        # TPU/XLA support
-        try:
-            import torch_xla
-            import torch_xla.core.xla_model as xm
-            print("[Unsloth Debug] torch_xla imported.")
-            if hasattr(xm, 'xla_device_hw'):
-                print("[Unsloth Debug] xm.xla_device_hw():", xm.xla_device_hw())
-                if xm.xla_device_hw() == 'TPU':
-                    print("[Unsloth Debug] TPU detected via xla_device_hw().")
-                    return "tpu"
-            xla_dev = str(xm.xla_device())
-            print("[Unsloth Debug] xm.xla_device():", xla_dev)
-            if xla_dev.startswith("xla"):
-                print("[Unsloth Debug] TPU detected via xla_device().")
-                return "tpu"
-        except Exception as e:
-            print("[Unsloth Debug] torch_xla import or check failed:", e)
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
-            print("[Unsloth Debug] XPU detected.")
-            return "xpu"
-    except Exception as e:
-        print("[Unsloth Debug] torch import failed:", e)
-    raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs, Intel GPUs, and TPUs (PyTorch/XLA). If you are on Colab/Kaggle TPU, ensure torch_xla is installed.")
+        import torch_xla.core.xla_model as xm
+        # Using xm.xrt_world_size() is a robust way to check if XLA has initialized
+        # and found any XLA devices (TPUs).
+        if xm.xrt_world_size() > 0:
+            return "tpu"
+    except ImportError:
+        # torch_xla is not installed, so it cannot be a PyTorch/XLA TPU environment.
+        pass
+    except Exception:
+        # Catch any other errors during XLA checks, such as if torch_xla is imported
+        # but not fully configured or usable, preventing crashes.
+        pass
+
+    raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs, Intel GPUs, or TPUs.")
 pass
 DEVICE_TYPE : str = get_device_type()
 
