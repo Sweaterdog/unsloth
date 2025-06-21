@@ -84,27 +84,36 @@ def get_device_type():
     if torch.cuda.is_available():
         return "cuda"
 
-    # Check for XPU
-    # Note: Place XPU check before TPU if XPU environments might also have torch_xla installed
-    # but XPU is the preferred/actual device.
+    # Then check for XPU
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         return "xpu"
 
-    # Check for TPU
-    try:
-        import torch_xla.core.xla_model as xm
-        # Using xm.xrt_world_size() is a robust way to check if XLA has initialized
-        # and found any XLA devices (TPUs).
-        if xm.xrt_world_size() > 0:
-            return "tpu"
-    except ImportError:
-        # torch_xla is not installed, so it cannot be a PyTorch/XLA TPU environment.
-        pass
-    except Exception:
-        # Catch any other errors during XLA checks, such as if torch_xla is imported
-        # but not fully configured or usable, preventing crashes.
-        pass
+    # Enhanced TPU Check
+    # Check for common TPU environment variables first
+    is_tpu_environment = False
+    if os.environ.get('COLAB_TPU_ADDR') or os.environ.get('XRT_TPU_CONFIG'):
+        is_tpu_environment = True
 
+    if is_tpu_environment:
+        try:
+            import torch_xla.core.xla_model as xm
+            # Confirm XLA is usable and devices are present.
+            # xm.xla_device() will error out if no XLA device is found or XLA is not initialized.
+            # xm.xrt_world_size() is a stronger check for initialized XLA system.
+            if xm.xrt_world_size() > 0:
+                return "tpu"
+            # As a fallback, if xrt_world_size somehow isn't giving > 0 but device exists:
+            # (This part might be redundant if xrt_world_size is reliable)
+            # elif xm.xla_device(): # Calling this might be enough to confirm XLA usability
+            #    return "tpu"
+        except ImportError:
+            # torch_xla not installed, cannot be a PyTorch/XLA TPU env.
+            pass
+        except Exception:
+            # Other errors during XLA check (e.g. XLA partially configured but not usable)
+            pass # Fall through to NotImplementedError if XLA checks fail despite env var
+
+    # If none of the above, raise error
     raise NotImplementedError("Unsloth currently only works on NVIDIA GPUs, Intel GPUs, or TPUs.")
 pass
 DEVICE_TYPE : str = get_device_type()
